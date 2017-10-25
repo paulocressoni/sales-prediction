@@ -1,0 +1,206 @@
+---
+title: "Desafio de Varejo"
+author: "Paulo A Cressoni"
+date: "October 24, 2017"
+output: html_document
+---
+
+```{r setup, echo=FALSE}
+# clean R memory
+rm(list=ls(all=TRUE));
+
+# set working directory
+setwd("~/Documents/Luiza Labs Challenge/");
+
+# for reproducibility
+set.seed(89);
+
+knitr::opts_chunk$set(echo = TRUE);
+```
+
+
+
+```{r load-libs, echo=FALSE, message=FALSE}
+# install the libs bellow if you don't have them already, 
+# ex: install.packages("ggplot2") to install the lib 'ggplot2', and then it can be loaded below
+
+# load libs
+library(ggplot2);
+library(dplyr);
+library("forecast");
+#library("TTR");
+
+# import functions from file
+source("plotForecastErrors.R")
+```
+
+
+
+```{r load-data, echo=FALSE}
+# load dataset
+train <- read.csv("desafio.csv", header = T);
+```
+
+## Previsão de Vendas
+
+Para prever  venda dos produtos nos meses de junho, julho e agosto, vamos utilizar séries temporais.
+
+Abaixo podemos notar que não há dados faltando no nosso *dataset*:
+
+```{r missing-values, echo=FALSE}
+# check if there's any missing values
+n_na <- sapply(train, function(x) sum(length(which(is.na(x)))));
+round(n_na, digits = 4);
+```
+
+
+
+```{r dates month year, echo=FALSE}
+# convert to Date
+train$capture_date <- as.Date(train$capture_date);
+train$process_date <- as.Date(train$process_date);
+
+# add "month" and "year" as new variables
+train$capture_month <- substring(train$capture_date, 6, 7);
+train$capture_month[train$capture_month == "00"] <- NA;
+train$capture_month <- as.factor(train$capture_month);
+
+train$capture_year <- substring(train$capture_date, 1, 4);
+train$capture_year[train$capture_year == "0000"] <- NA;
+train$capture_year <- as.factor(train$capture_year);
+
+train$process_month <- substring(train$process_date, 6, 7);
+train$process_month[train$process_month == "00"] <- NA;
+train$process_month <- as.factor(train$process_month);
+
+train$process_year <- substring(train$process_date, 1, 4);
+train$process_year[train$process_year == "0000"] <- NA;
+train$process_year <- as.factor(train$process_year);
+```
+
+
+
+```{r group_by time-series, echo=FALSE}
+# sum the quantities by month for each code
+train.ts <- train[, c("capture_year", "capture_month", "code", "quantity")] %>% group_by(capture_year, capture_month, code) %>% summarise(quantity = sum(quantity));
+``` 
+
+Vamos utilizar o código de produto *2e35421c34fb588ba40a0c57b3971d24* para realizar um teste e verificar se a análise é válida. 
+
+Abaixo podemos ver o gráfico da quantidade de produtos por mês:
+
+```{r time-series, echo=FALSE}
+# sum the quantities by month
+code <-  "2e35421c34fb588ba40a0c57b3971d24"
+# b08b7321c4db8f45a1a97a79d1e44dd8
+train.ts.work <- train.ts[train.ts$code == code, "quantity"]
+train.ts.work <- train.ts.work[1:12,]
+train.ts.work[is.na(train.ts.work)] <- 0
+
+train.ts.work <- ts(train.ts.work, start = c(2016, 06), frequency = 12)
+
+# alterate margin
+#par(mar = rep(2, 4))
+plot.ts(train.ts.work)
+# default margin
+#par(mar = c(5, 4, 4, 2) + 0.1)
+
+# doesn't have enough data for using seasonal analisys
+#train.ts.dec <- decompose(train.ts.work)
+``` 
+
+Podemos averiguar que as séries temporais criadas a partir do *dataset* disponível **nâo** é suficiente para completar o mínimo de **dois ciclos de dados** (neste caso dois anos completos). O que nos impede de poder retirar dados importantes, como a sazonalidade e *trend*, mas iremos continuar a análise temporal ignorando esses dados por enquanto.
+
+Abaixo podemos ver no gráfico uma linha colorida que representa a curva mais suave que segue os valores desta série temporal:
+
+```{r Holt Winters plot, echo=FALSE}
+# Holt Winters 
+train.forecast <- HoltWinters(train.ts.work, beta = F, gamma = F);
+# Alpha states that forecasts are based on both recent and less recent observations
+
+plot(train.forecast)
+
+# sum-of-squared-errors
+#train.forecast$SSE
+```
+
+Abaixo temos o gráfico que representa a previsão dos três próximos mêses, e é composto do valor médio e os intervalos de valores altos e baixos de confiança de 80% e 95%:
+
+```{r Holt Winters forecast plot, echo=FALSE}
+# forecast next 3 months
+train.forecast_2 <- forecast(train.forecast, h = 3);
+
+# plot data with forecast
+plot(train.forecast_2)
+
+```
+
+Abaixo temos um gráfico da quantidade de ruído (ou erro) presente nesta série temporal. Quanto mais distante do valor 0 no eixo *y*, maior o ruído. O ruído é a diferença entre o dado real da série e o novo dado gerado:
+
+```{r time-series plot, echo=FALSE}
+
+plot.ts(train.forecast_2$residuals)
+
+```
+
+Abaixo temos uma outra representação gráfica do ruído, mas agora por histograma. Quanto maior a concentração no valor 0 do eixo *x*, menor o ruído.
+
+```{r, echo=FALSE}
+train.forecast_2$residuals[is.na(train.forecast_2$residuals)] <- 0
+plotForecastErrors(train.forecast_2$residuals)
+```
+
+Abaixo podemos observar alguns dados de previsão dos três próximos mêses como a média, os valores baixos com intervalo de confiança de 80% e 95%, e os valores altos com intervalo de confiança de 80% e 95%:
+
+```{r display-results, echo=FALSE}
+train.forecast_2
+```
+
+A quantidade média necessária para cada produto nos mêses de junho, julho e agosto estão listados abaixo:
+
+```{r loop time-series, echo=FALSE}
+# get the name of each product
+codes <- levels(train$code)
+results <- data.frame(Prod = as.character(""), 
+                      Jun = as.numeric(0), 
+                      Jul = as.numeric(0), 
+                      Ago = as.numeric(0))
+
+# iterate through products
+for(code in codes){
+  # get the data of a given product
+  train.ts.work <- train.ts[train.ts$code == code, "quantity"]
+  train.ts.work <- train.ts.work[1:12,]
+  train.ts.work[is.na(train.ts.work)] <- 0
+
+  # create a time-series object
+  train.ts.work <- ts(train.ts.work, start = c(2016, 06), frequency = 12)
+  
+  # create a Holt Winters predict on the time-serie
+  train.forecast <- HoltWinters(train.ts.work, beta = F, gamma = F)
+  
+  # forecast the next 3 months
+  train.forecast_2 <- forecast(train.forecast, h = 3);
+  
+  # get the predicted means and the product code
+  tmp <- data.frame(Prod = as.character(code), 
+                    Jun = as.numeric(round(train.forecast_2$mean[1])), 
+                    Jul = as.numeric(round(train.forecast_2$mean[2])), 
+                    Ago = as.numeric(round(train.forecast_2$mean[3])))
+  
+  # append the rows
+  results <- rbind(results, tmp)
+}
+
+# the product code with the mean amount to buy in the next three months
+results <- results[2:nrow(results), ]
+
+# The time-series must have at least 2 whole cycles (which this doesn't) to better perform, therefore analysing seasonality, trends and noise to perform better.
+
+# show results
+results
+```
+
+## Considerações Finais
+
+Esta análise foi desenvolvida com o objetivo de informar a demanda de compra de cada produto listado acima, da melhor maneira possível de acordo com os dados que foram fornecidos. A análise pode ser muito mais apurada e os resultados optimizados caso haja um dataset mais extenso e completo.

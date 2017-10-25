@@ -1,0 +1,191 @@
+---
+title: "Desafio de Varejo"
+author: "Paulo A Cressoni"
+date: "October 19, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# clean R memory
+rm(list=ls(all=TRUE));
+
+# set working directory
+setwd("~/Documents/Luiza Labs Challenge/");
+
+# for reproducibility
+set.seed(76);
+
+knitr::opts_chunk$set(echo = TRUE);
+```
+
+```{r load-libs, echo=FALSE}
+# install the libs bellow if you don't have them already, 
+# ex: install.packages("ggplot2") to install the lib 'ggplot2', and then it can be loaded below
+
+# load libs
+library(ggplot2);
+library(corrgram);
+library(cluster);
+```
+
+```{r load-data, echo=FALSE}
+# load dataset
+train <- read.csv("desafio.csv", header = T);
+```
+
+## Agrupamento de Produtos
+
+Antes de realizar o agrupamento dos produtos, vamos verificar se há dados faltando no nosso dataset. Abaixo podemos verificar que não há dados incompletos:
+
+```{r missing-values, echo=FALSE}
+# check if there's any missing values
+n_na <- sapply(train, function(x) sum(length(which(is.na(x)))));
+round(n_na, digits = 4);
+```
+
+O método mais eficaz para agrupar esses **dados mistos**, seria utilizar uma matriz de distância do tipo *Gower*, para então realizar os agrupamentos. Porém, como eu não tenho memória suficiente em minha máquina (devido à grande quantidade de dados), eu optei por normalizar os dados numéricos, e transformar os dados categóricos em *variáveis dummy*. Assim todas as variáveis estariam em um *range* entre 0 e 1, e então seria plausível utilizar distância euclideana para agrupar os dados.
+
+```{r data-manipulation, echo=FALSE}
+# separating the numeric variables
+train.num <- train[, c("pis_cofins", "icms", "liquid_cost")];
+
+# multiply price * quantity, and use it as one variable only
+train.num$quantityXprice <- train$quantity * train$price;
+
+# normalize numeric data (range from 0 to 1)
+train.num <- apply(train.num, MARGIN = 2, FUN = function(X) (X - min(X))/diff(range(X)))
+
+# transforming factors into numeric dummies
+attach(train);
+train.num <- cbind(train.num, model.matrix(~order_status + 0));
+train.num <- cbind(train.num, model.matrix(~process_status + 0));
+train.num <- cbind(train.num, model.matrix(~source_channel + 0));
+train.num <- cbind(train.num, model.matrix(~category + 0));
+detach(train);
+```
+
+Abaixo segue um gráfico que indica se há correlação entre as variáveis utilizadas, e sua força de acordo com a cor:
+
+```{r correlation, echo=FALSE}
+# finding correlation strength
+matcor <- cor(train.num);
+corrgram(matcor, type = "cor", lower.panel = panel.shade, upper.panel = panel.pie);
+``` 
+
+O método a ser utilizado para realizar o agrupamento de dados será o *K-means*. Este método divide os dados em *k* grupos, onde cada observação pertence ao grupo mais próximo da média.
+O gráfico abaixo mostra o valor de soma dos quadrados (neste caso da variância) para o agrupamento em até 15 *clusters*:
+
+```{r kmeans number-of-clusters, echo=FALSE}
+# Determine number of clusters
+wss <- (nrow(train.num)-1) * sum(apply(train.num, 2, var));
+
+# between 2 and 15 clusters
+for (i in 2:15) wss[i] <- sum(kmeans(train.num, centers=i)$withinss);
+
+# choose number of clusters according to the plot's elbow shape
+plot(1:15, wss, type="b", xlab="Número de clusters", ylab="Soma dos quadrados nos grupos")
+#plot(1:15, wss, type="b", xlab="Number of Clusters", ylab="Within groups sum of squares")
+```
+
+Podemos escolher o número de *clusters* de acordo com a curva no *formato de cotovelo* do gráfico. Vamos realizar o agrupamento em 4 *clusters*. Abaixo está o número do *cluster* com a quantidade de observações em cada *cluster*.
+
+```{r kmeans, echo=FALSE}
+# kmeans with 4 clusters
+fit1 <- kmeans(train.num, 4, nstart = 25);
+table (fit1$cluster)
+
+# get cluster means (for numeric only)
+#aggregate(train.num,by=list(fit1$cluster),FUN=mean)
+
+# append cluster assignment
+cluster <- as.factor(fit1$cluster);
+train <- data.frame(train, cluster);
+```
+
+```{r dates month year, echo=FALSE}
+# add "month" and "year" as new variables
+train$capture_month <- months(as.Date(train$capture_date));
+train$capture_month <- as.factor(train$capture_month);
+
+train$capture_year <- substring(train$capture_date, 1, 4);
+train$capture_year[train$capture_year == "0000"] <- NA;
+train$capture_year <- as.factor(train$capture_year);
+
+train$process_month <- months(as.Date(train$process_date));
+train$process_month <- as.factor(train$process_month);
+
+train$process_year <- substring(train$process_date, 1, 4);
+train$process_year[train$process_year == "0000"] <- NA;
+train$process_year <- as.factor(train$process_year);
+```
+
+Após agrupados, os dados podem ser analisados de acordo com cada grupo. Abaixo está a análise do grupo 1:
+```{r analise-results first-cluster, echo=FALSE}
+# the observations below in each group may refer to another group instead, 'cause the group's labels can change as the K-means start points are random.
+summary(train[train$cluster == 1,]) 
+# most "cancelado boleto n pago", all status 'captado', most category "388128822cef4b4f102ae881e040a64b"
+```
+
+Abaixo está a análise do grupo 2:
+```{r analise-results second-cluster, echo=FALSE}
+# the observations below in each group may refer to another group instead, 'cause the group's labels can change as the K-means start points are random.
+summary(train[train$cluster == 2,]) 
+# category all "388128822cef4b4f102ae881e040a64b", most order_status "entrega total", all process_status "processado", source_channel all "b76eb9b8fc0f17098812da9117d3e500"
+```
+
+Abaixo está a análise do grupo 3:
+```{r analise-results third-cluster, echo=FALSE}
+# the observations below in each group may refer to another group instead, 'cause the group's labels can change as the K-means start points are random.
+summary(train[train$cluster == 3,]) 
+# most code "4534ea61b50410b3b6243e02b40c8cd1", most category "9a97178a18aa6333aabdfb21de182b99", most order_status "entrega total", all process_status "processado", most source_channel "b76eb9b8fc0f17098812da9117d3e500"
+```
+
+Abaixo está a análise do grupo 4:
+```{r analise-results fourth-cluster, echo=FALSE}
+# the observations below in each group may refer to another group instead, 'cause the group's labels can change as the K-means start points are random.
+summary(train[train$cluster == 4,]) 
+# most category "388128822cef4b4f102ae881e040a64b", most order_status "entrega total", all process_status "processado"
+```
+
+Nos gráficos abaixo, cada barra representa um *cluster*, o eixo *y* representa a quantidade de observações e na legenda, neste caso, temos a variável *order_status*. Podemos verificar que há um *cluster* que agrupa uma grande quantidade de observações referentes à cancelamentos diversos e fraudes.
+
+```{r plot-analisys order_status, echo=FALSE}
+ggplot(train, aes(cluster, fill = order_status)) + geom_bar()
+```
+
+No gráfico abaixo temos um gráfico similar, porém na legenda temos a variável *process_status*. Podemos observar que o *cluster* que contém apenas o valor *captado* é o mesmo anteriormente citado acima:
+
+```{r plot-analisys process_status, echo=FALSE}
+ggplot(train, aes(cluster, fill = process_status)) + geom_bar()
+```
+
+Abaixo podemos ver o gráfico com a legenda representando a variável *category*. Podemos observar que há um *cluster* que se difere dos outros por ter a maioria de seus produtos referentes a uma categoria pouco presente nos outros *clusters*:
+
+```{r plot-analisys category, echo=FALSE}
+ggplot(train, aes(cluster, fill = category)) + geom_bar()
+```
+
+No gráfico abaixo a legenda representa a variável *source_channel*. Podemos observar que há um outro *cluster* com uma grande quantidade de um *source_channel* especícifo:
+
+```{r plot-analisys source_channel, echo=FALSE}
+ggplot(train, aes(cluster, fill = source_channel)) + geom_bar()
+```
+
+Podemos verificar abaixo que há um *cluster* com sua maioria composta de apenas um *code* específico:
+
+```{r plot-analisys code, echo=FALSE}
+ggplot(train, aes(cluster, fill = code)) + geom_bar() + theme(legend.position='none')
+```
+
+Abaixo podemos observar que dentro dos *clusters* o process_month (mês da variável process_date) é bem distribuído e com apenas algumas poucas oscilações, exceto no *cluster* onde há muitos cancelamentos e fraudes.
+
+```{r plot-analisys process_month, echo=FALSE}
+ggplot(train, aes(cluster, fill = process_month)) + geom_bar()
+```
+
+
+## Considerações Finais
+
+Na Análise acima pode-se ter uma noção de como agrupar os produtos. Após agrupados, os grupos podem ser analisados e são encontradas algumas similaridades nos mesmos. Para uma análise mais profunda seria aconselhável a presença de um profissional com a inteligência do negócio. Como muitas dados estão codificados, a análise acaba sendo limitada. A análise pode ser realizada utilizando outros métodos, porém por motivo de hardware (memória insuficiente) este foi o método optado.
+
+
